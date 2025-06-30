@@ -1,0 +1,123 @@
+## Moomoo量化策略框架具体说明
+
+1. 框架结构
+Moomoo量化策略框架是基于Python的量化交易平台，提供标准化的策略开发环境。策略开发包含以下三个层面：
+
+1.1 基础框架函数
+策略必须包含两个核心函数：
+- initialize(): 策略启动时运行一次，完成初始化设置
+- handle_data(): 按设定周期重复运行，执行交易逻辑
+
+1.2 约定函数
+initialize() 函数中必须包含：
+- trigger_symbols(): 设置交易标的和触发周期
+- custom_indicator(): 定义技术指标
+- global_variables(): 设置策略参数
+
+1.3 自定义函数
+根据策略需求，可以自定义各类辅助函数，例如：
+- 计算函数：如计算网格价格、计算持仓等
+- 交易函数：如执行买入、卖出逻辑
+- 风控函数：如止损、仓位控制等
+- 数据处理函数：如技术指标计算等
+
+2. 运行机制
+- 策略启动：框架调用 initialize() 进行初始化
+- 周期运行：按 trigger_symbols() 设定的周期调用 handle_data()
+- 自定义函数：在 handle_data() 中根据策略逻辑调用
+
+通过合理组织这三层函数，可以构建出逻辑清晰、易于维护的量化交易策略。
+
+3. 具体函数说明
+3.1 initialize() 初始化
+initialize() 为策略的初始化函数，仅会在策略启动时运行一次。后续在接收信号循环运行时，不会反复初始化。
+initialize() 函数中，默认有 3 个约定函数：trigger_symbols()，custom_indicator()，global_variables()
+不建议在 initialize() 内增加过多的逻辑，因为可能会导致策略启动缓慢。
+
+3.2 trigger_symbols() 定义运行标的
+您可以参照如下方法定义运行标的：
+```
+def trigger_symbols(self):    # 定义运行标的
+    self.运行标的1 = declare_trig_symbol()
+    self.运行标的2 = declare_trig_symbol()
+```
+每个策略中最多可创建 8 个运行标的。实盘运行和历史回测中，可指定具体标的为运行标的。 
+例如：将运行标的指定为 苹果（AAPL）。
+可以在接口中，使用运行标的进行代指。 例如：将下单控件指定为"买入 10 股运行标的"。
+运行标的的行情推送，可以驱动策略循环运行。 例如：将策略的运行条件设为"苹果（AAPL）每个 tick 运行一次"。
+
+3.3 custom_indicator() 注册指标
+不同于可视化策略，代码策略无法直接调用 "自选" tab 下 K 线图表下方的 "指标管理" 中的已有自定义指标，需要重新编写。
+使用代码策略调用自定义技术指标前，需要在 custom_indicator() 函数中，先使用麦语言编写和注册该指标。请参考以下步骤：
+步骤 1：在 custom_indicator() 函数中，使用 register_indicator() 接口编写并注册该指标：
+```
+def custom_indicator(self):
+    self.register_indicator(indicator_name='MA', script='''MA1:MA(CLOSE,P1),COLORFF8D1E;''', para_list=['P1'])
+```
+步骤 2：需要获取指标值时，使用 get_MyLang_indicator() 接口进行请求。
+
+3.4 global_variables() 定义全局变量
+可以参照如下方法定义全局变量：
+```
+def global_variables(self):   # 定义全局变量
+    self.a = 10  # 定义浮点（数值）型全局变量
+    self.b = Contract('US.AAPL')  # 定义标的型全局变量
+```
+Python 中常见的变量类型都支持定义，例如：字符串（str）、浮点数（float）、整数（int）、列表（list）、元组（tuple）、字典（dict）等。
+如果需要定义标的型全局变量，则需要使用 Contract() 函数。参数为指定的字符串格式：市场代码.证券代码。例如：苹果的格式为'US.AAPL'。
+
+3.5 handle_data() 主函数
+每次收到触发信号，会运行一次 handle_data() 函数。建议将策略的主要逻辑，写在 handle_data() 函数中。
+handle_data() 目前会响应这 4 类触发信号：每根 K 线运行一次，每 Tick 运行一次、每 N 秒运行一次、定时运行。
+
+3.6 show_variable() 函数
+当使用该函数时，会在运行设置上显示出该全局变量。该函数仅适用于在 def global_variale() 约定函数下方使用。当全局变量使用该函数时，不允许使用其他赋值方式对该变量进行赋值。多变量赋值时，不支持使用此函数。
+
+示例说明：创建全局变量 A 和 B，值分别为 1.0 和 2.0，类型为 Float，使用 show_variable() 函数显示全局变量 A。
+
+def global_variale(self):
+    self.A=show_variable(1.0,GlobalType.FLOAT)  # 使用 show_variable() 函数显示全局变量 A
+    self.B=2.0                                  # 全局变量 B 不显示在运行设置中
+
+示例表现：运行设置中出现全局变量 A，默认值为 1.0，类型为 Float，全局变量 B 不显示。
+
+3.7 关于Python标准模块，目前支持使用 Python 标准模块 ，暂不支持添加第三方模块。
+
+使用示例：
+```
+import time
+print(time.time())  # 在日志中打印当前时间戳
+time.sleep(5)  # 等待 5 秒
+
+import random
+print(random.random())  # 生成一个[0,1)范围内的随机数，并在日志中打印出来
+```
+
+出于安全考虑，我们在 Python 底层禁用了读写硬盘、网络请求、界面创建的功能。这可能导致，标准库中部分相关功能无法使用。
+
+3.8 关于内置API函数
+内置API函数是指在策略编写过程中，可以直接调用的函数，注意在自定义策略编写时，自定义变量名不能和内置API函数重名。常用的内置API函数见附件二。
+
+4. 最简单的量化框架样例：
+```
+class Strategy_1(StrategyBase):
+    def initialize(self):  # 初始化，仅在策略启动时运行一次
+        self.trigger_symbols()  # 定义运行标的
+        self.custom_indicator()  # 注册指标
+        self.global_variables()  # 定义全局变量
+    
+    def trigger_symbols(self):    # 定义运行标的
+        self.运行标的1 = declare_trig_symbol()
+        self.运行标的2 = declare_trig_symbol()
+    
+    def global_variables(self):   # 定义全局变量
+        self.a = 10  # 定义浮点（数值）型全局变量
+        self.b = Contract('US.AAPL')  # 定义标的型全局变量
+        
+    def custom_indicator(self): # 定义自定义指标
+        self.register_indicator(indicator_name='MA', script='''MA1:MA(CLOSE,P1),COLORFF8D1E;''', param_list=['P1']) # 注册一个用麦语言写的自定义指标
+            
+    def handle_data(self):  # 约定函数2，每次收到触发信号，会运行一次。响应：每 K线运行一次，每tick运行一次、每N秒运行一次、定时运行
+        ## 策略的执行逻辑，写在这里
+        pass
+```

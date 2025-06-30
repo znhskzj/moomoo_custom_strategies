@@ -1,0 +1,280 @@
+## Moomoo量化功能中常用的API函数及其用法：
+1. current_price
+获取指定标的的最新价格
+current_price(symbol, price_type=THType.FTH)
+其中symbol类型为Contract（Contract定义见下文），price_type类型为THType，枚举值，RTH和FTH分别表示盘中和全时段，返回类型：float。
+示例-获取美股苹果的最新价格：
+```
+current_price(symbol=Contract("US.AAPL") , price_type=THType.FTH)
+```
+示例返回值：150.82
+
+2. Contract
+将字符串转换成系统可识别的证券代码
+Contract(symbol_str)
+其中symbol_str类型为str，字符串格式：市场代码.证券代码。例：苹果是'US.AAPL'，返回类型：Contract。
+示例-将 aapl 定义为苹果的股票代码，然后请求其最新的股价：
+```
+aapl = Contract('US.AAPL')  
+last_price(aapl) 
+```
+示例返回值：150.82
+
+3. bid
+获取指定标的第 n 档的买盘委托价。
+bid(symbol, level=1)
+其中symbol类型为Contract，level类型为int，对应第几档，返回类型：float。
+示例-获取美股苹果的第一档买盘委托价：
+```
+bid(symbol=Contract("US.AAPL"), level=1)
+```
+示例返回值：150.82
+
+4. ask
+获取指定标的第 n 档的卖盘委托价。
+ask(symbol, level=1)
+其中symbol类型为Contract，level类型为int，对应第几档，返回类型：float。
+示例-获取美股苹果的第一档卖盘委托价：
+```
+ask(symbol=Contract("US.AAPL"), level=1)
+```
+示例返回值：145.99
+
+5. device_time
+获取当前设备时间
+device_time(TimeZone.DEVICE_TIME_ZONE)
+其中TimeZone类型为TimeZone，枚举值，DEVICE_TIME_ZONE表示本机时区，ET, CT, PST, CCT分别表示美国东部时间、美国中部时间、太平洋时间、北京时间。返回类型：datetime。
+示例-获取本设备的当前时间：
+```
+devicetime = device_time(TimeZone.DEVICE_TIME_ZONE)
+print(devicetime)
+print(devicetime.strftime("%Y-%m-%d %H:%M:%S"))  # 格式化日期和时间
+print(devicetime.hour)  # 打印小时
+print(devicetime.minute)  # 打印分钟
+print(devicetime.second)  # 打印秒
+```
+示例返回值：
+```
+2023-07-31 09:30:00-04:00
+2023-07-31 09:30:00
+9
+30
+0
+```
+
+6. total_cash
+当前账户（以某个币种计价）的总现金
+total_cash(currency=Currency.HKD)
+其中currency类型为Currency，表示计价货币。枚举值，HKD表示港元，USD表示美元。返回类型：float。
+示例-获取当前账户（以HKD计价）的总现金：
+```
+total_cash(currency=Currency.HKD)
+```
+示例返回值：20380
+
+7. position_holding_qty
+获取指定标的的持有数量
+position_holding_qty(symbol)
+其中symbol类型为Contract，对应标的。返回类型：float。
+示例-获取美股苹果的持有数量：
+```
+position_holding_qty(symbol=Contract("US.AAPL"))
+```
+示例返回值：100
+
+8. position_cost
+获取指定标的持仓的摊薄成本价/平均成本价，默认为平均成本价。
+摊薄成本价 = (持有期内买入总金额-持有期内卖出总金额) ÷ 持有数量
+摊薄成本价不支持期货。摊薄成本价考虑了持有期内每次交易的盈亏（暂不包含现金派息、供股等情况）。既考虑买入，也考虑卖出的变化。卖出股票所对应的盈亏会摊高或摊低成本价，甚至会出现成本价为负数的情况。
+平均成本价 = （买入前的平均成本价×数量 + 此次买入的价格×数量）÷ 买入后持有数量
+平均成本价支持股票、期货。平均成本价是指当前持仓的平均成本（不包含佣金及费用）。只考虑买入，不考虑卖出的变化。卖出股票所对应的盈亏不摊薄成本价，而转为已实现盈亏。
+position_cost(symbol,cost_price_model=CostPriceModel.AVG)
+其中symbol类型为Contract，对应标的，cost_price_model类型为CostPriceModel，表示成本价模型。枚举值，AVG表示平均成本价，DILUTED表示摊薄成本价。返回类型：float。
+示例-获取苹果的摊薄成本价：
+```python
+position_cost(symbol=Contract("US.AAPL"),cost_price_model=CostPriceModel.DILUTED)
+```
+示例返回值：150
+
+示例-获取苹果的平均成本价：
+```python
+position_cost(symbol=Contract("US.AAPL"),cost_price_model=CostPriceModel.AVG)
+```
+示例返回值：145
+
+9. request_orderid
+查询订单ID
+request_orderid(symbol=Contract(""), status=[], start="", end="")
+其中symbol类型为Contract，对应标的，status类型为list，表示订单状态，枚举值，SUBBMITTING表示提交中，SUBMITTED表示已提交，等待成交，FILLED_PART表示部分成交，FILLED_ALL表示全部已成交，FAILED表示下单失败。start和end类型为str，表示订单查询的起止时间。
+示例-查询苹果的已全部成交订单ID：
+```python
+request_orderid(symbol=Contract("US.AAPL"), status=["FILLED_ALL"], start="2023-01-03", end="2023-02-01")
+```
+示例返回值：["FT6644468615272262086","FT6644468615272262087"]
+
+
+10. request_executionid
+查询成交ID
+request_executionid(symbol=Contract(""), start="", end="")
+其中symbol类型为Contract，对应标的，start和end类型为str，表示成交查询的起止时间。若start和end为空，则查询最近31天的数据。
+示例-查询苹果的成交ID：
+```python
+request_executionid(symbol=Contract("US.AAPL"), start="2023-01-03", end="2023-02-01")
+```
+示例返回值：["4665291631090960915", "4665291631090960916"]
+
+11. execution_status
+查询成交状态
+execution_status(executionid)
+其中executionid类型为str，表示成交ID。返回类型：枚举型的DealStatus，枚举值和枚举说明如下：
+OK	正常
+CANCELLED	成交被取消
+CHANGED	成交被更改
+示例-查询成交ID为"4665291631090960915"的成交状态：
+```python
+execution_status(executionid="4665291631090960915")
+```
+示例返回值：OK
+
+12. execution_price
+查询成交价格
+execution_price(executionid)
+其中executionid类型为str，表示成交ID。返回类型：float，表示成交价格。
+示例-查询成交ID为"4665291631090960915"的成交价格：
+```python
+execution_price(executionid="4665291631090960915")
+```
+示例返回值：150
+
+13. place_limit
+下限价单
+place_limit(symbol, price, qty, side=OrderSide.BUY, time_in_force=TimeInForce.DAY)
+其中symbol类型为Contract，price类型为float，表示限价单价格，qty类型为float，表示限价单数量，side类型为OrderSide，表示交易方向，枚举值，BUY表示买入，SELL表示卖出。time_in_force类型为TimeInForce，表示订单期限，枚举值，DAY表示当日有效，GTC表示撤单前有效。返回类型：str，表示订单ID。
+示例-下苹果的限价单：
+```python
+place_limit(symbol=Contract("US.AAPL"), price=mid_price(symbol=Contract("US.AAPL")), qty=(1*lot_size(symbol=Contract("US.AAPL"))), side=OrderSide.BUY, time_in_force=TimeInForce.DAY)
+```
+示例返回值：FT6644468615272262086
+
+14. place_stop_limit
+下止损限价单
+place_stop_limit(symbol, aux_price, price, qty, side=OrderSide.BUY, time_in_force=TimeInForce.DAY)
+其中symbol类型为Contract，aux_price类型为float，表示触发价格，price类型为float，表示限价单价格，qty类型为float，表示限价单数量，side类型为OrderSide，表示交易方向，枚举值，BUY表示买入，SELL表示卖出。time_in_force类型为TimeInForce，表示订单期限，枚举值，DAY表示当日有效，GTC表示撤单前有效。返回类型：str，表示订单ID。
+示例-下苹果的止损限价单：
+```python
+place_stop_limit(symbol=Contract("US.AAPL"), aux_price=140, price=150, qty=100, side=OrderSide.BUY, time_in_force=TimeInForce.DAY)
+```
+示例返回值：FT6644468615272262086
+
+15. cancel_order_by_symbol
+撤单
+cancel_order_by_symbol(symbol, side=TradeSide.ALL)
+其中symbol类型为Contract，side类型为TradeSide，表示交易方向，枚举值，ALL表示全部撤单，BUY表示撤买单，SELL表示撤卖单。
+示例-撤销苹果的全部订单：
+```python
+cancel_order_by_symbol(symbol=Contract("US.AAPL"), side=TradeSide.ALL)
+```
+
+16. round
+四舍五入
+round(value)
+其中value类型为float，表示需要四舍五入的数值。返回类型：float，表示四舍五入后的数值，注意这个函数只支持取整，如果需要小数点后1位的，需要适当的数学运算。
+示例：
+```python
+round(2.5)
+```
+示例返回：3
+
+17. min
+最小值
+min(arg1,arg2,*args)
+其中arg1,arg2,*args类型为float，表示需要比较的数值。返回类型：float，表示最小值，注意这个函数不支持类似lamba表达式的使用，只能传入具体的数值。
+示例：
+```python
+min(2,3,4)
+```
+示例返回：2
+
+
+18. max
+最大值
+max(arg1,arg2,*args)
+其中arg1,arg2,*args类型为float，表示需要比较的数值。返回类型：float，表示最大值，注意这个函数不支持类似lamba表达式的使用，只能传入具体的数值。
+示例：
+```python
+max(2,3,4)
+```
+示例返回：4
+```
+
+19. execution_qty
+查询成交数量
+execution_qty(executionid)
+其中executionid类型为str，表示成交ID。返回类型：float，表示成交数量。
+示例-查询成交 ID 为"4665291631090960915"的成交数量：
+```python
+execution_qty(executionid="4665291631090960915")
+```
+示例返回值：100
+
+20. execution_time
+查询成交时间
+execution_time(excecutionid,time_zone=TimeZone.MARKET_TIME_ZONE)
+其中executionid类型为str，表示成交ID。time_zone类型为TimeZone，表示时区。
+返回类型：datetime，表示成交时间。
+示例-查询成交 ID 为“10000000000000001”的成交时间：
+```python
+executiontime = execution_time(excecutionid="10000000000000001",time_zone=TimeZone.MARKET_TIME_ZONE)
+print(executiontime)
+print(executiontime.strftime("%Y-%m-%d %H:%M:%S"))  # 格式化日期和时间
+print(executiontime.hour)  # 打印小时
+print(executiontime.minute)  # 打印分钟
+print(executiontime.second)  # 打印秒
+```
+示例返回值：
+2023-07-31 09:30:00-04:00
+2023-07-31 09:30:00
+9
+30
+0
+
+21. execution_side
+查询成交方向
+execution_side(executionid)
+其中executionid类型为str，表示成交ID。返回类型：OrderSide，返回枚举值的订单方向，其中：BUY为买入，SELL为卖出，SELL_SHORT为卖空，BUY_BACK为买回。
+示例-查询成交 ID 为"4665291631090960915"的交易方向：
+```python
+execution_side(executionid="4665291631090960915")
+```
+示例返回值：BUY
+
+22. order_status
+通过订单 ID 查询订单状态。你可以通过以下 2 个函数获得订单 ID ：下单（place_limit），查询订单 ID（request_orderid）。
+order_status(order_id)
+其中order_id类型为str，表示订单ID。返回类型：OrderStatus，返回枚举值的订单状态，枚举值和枚举说明如下：
+WAITING_SUBMIT	等待提交
+SUBMITTING	提交中
+SUBMITTED	已提交，等待成交
+FILLED_PART	部分成交
+FILLED_ALL	全部已成交
+CANCELLED_PART	部分成交，剩余部分已撤单
+CANCELLED_ALL	全部已撤单，无成交
+FAILED	下单失败，服务拒绝
+DISABLED	已失效
+DELETED	已删除，无成交的订单才能删除
+示例-查询 ID 为“FH123456789”的订单状态：
+```python
+order_status(orderid="FH123456789")
+```
+示例返回值：FILLED_ALL
+
+23. order_filled_qty
+通过订单 ID 查询指定订单的成交数量。你可以通过以下 2 个函数获得订单 ID ：下单（place_limit），查询订单 ID（request_orderid）。
+order_filled_qty(orderid)
+其中order_id类型为str，表示订单ID。返回类型：float，表示订单的成交数量。
+示例
+查询 ID 为“FH123456789”的订单的成交数量
+order_filled_qty(orderid="FH123456789")
+示例返回值
+100
+

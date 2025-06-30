@@ -4,6 +4,11 @@ class Strategy(StrategyBase):
     def initialize(self):
         """初始化策略"""
         try:
+            self._version = "v1.1.0"
+            self._description = (
+                "本策略适用于长期定投优质资产，通过回撤分层加仓降低成本。"
+                "v1.1.0: 回测模式下加仓与定投日志完全统一，便于回测与实盘对齐分析。"
+            )
             self.trigger_symbols()
             self.global_variables()
             self.custom_indicator()
@@ -12,9 +17,11 @@ class Strategy(StrategyBase):
             # 新增：记录当前已触发的最高回撤层级
             self.current_drawdown_layer = 0
     
-            print("策略初始化完成")
+            print(f"策略初始化完成 | 版本: {self._version}")
+            print(f"策略说明: {self._description}")
         except Exception as e:
             print(f"初始化失败: {str(e)}")
+
 
     def trigger_symbols(self):
         """定义交易标的"""
@@ -39,16 +46,36 @@ class Strategy(StrategyBase):
     def global_variables(self):
         """初始化全局变量"""
         try:
-            self.investment_qty = show_variable(1, GlobalType.FLOAT, "每次定投数量（股）")
-            self.support_fractional_shares = show_variable(False, GlobalType.BOOL, "是否支持碎股")
-            self.investment_interval = show_variable(1440, GlobalType.INT, "定投周期（分钟）")
-            self.drawdown_threshold_base = show_variable(5, GlobalType.FLOAT, "基础回撤阈值（%）")
-            self.backtest_mode = show_variable(False, GlobalType.BOOL, "是否启用回测优化模式")
+            # 简化变量名，增加单位和简要提示
+            # 定投股数（仅允许10的倍数，10~200）
+            self.qty = show_variable(10, GlobalType.INT)  # 只允许10~200且为10的倍数，合法性校验移至下单逻辑
+            # 支持碎股，仅允许True/False
+            self.frac_shares = show_variable(False, GlobalType.BOOL)
+            # 定投周期（可选1小时/日/周）
+            self.interval_min = show_variable(1440, GlobalType.INT)
+            # 新增：仅定投模式，True时只做基础定投，回撤及风控参数全部失效
+            self.basic_invest_only = show_variable(False, GlobalType.BOOL)
+            self.drawdown_pct = show_variable(5, GlobalType.FLOAT)
+            # 回测模式，仅允许True/False
+            self.backtest = show_variable(True, GlobalType.BOOL)
+            # 互斥开仓，仅允许True/False
+            self.mutual_exclusive = show_variable(True, GlobalType.BOOL)
+            # 日志等级，仅允许0或1
+            self.log_level = show_variable(0, GlobalType.INT)
+            # 极端回撤阈值
+            self.extreme_drawdown_pct = show_variable(80, GlobalType.FLOAT)
+
             self.highest_price = None
             self.last_investment_time = None
             self.average_cost = 0.0  # 持仓成本
             self.last_adjusted_qty = None  # 用于记录上次的加仓数量
-            print("全局变量初始化完成")
+            import collections
+            self.high_queue = collections.deque(maxlen=20)
+            self.virtual_balance = 1e6 if self.backtest else None
+            # 新增：回测持仓统计变量
+            self._position = 0  # 当前持仓股数
+            self._total_cost = 0.0  # 累计买入金额
+            print(f"全局变量初始化完成: 股数={self.qty}, 碎股={self.frac_shares}, 周期={self.interval_min}分钟, 回撤%={self.drawdown_pct}, 回测={self.backtest}, 互斥={self.mutual_exclusive}, 日志等级={self.log_level}, 初始虚拟余额={self.virtual_balance}")
         except Exception as e:
             print(f"全局变量设置失败: {str(e)}")
 
@@ -59,67 +86,150 @@ class Strategy(StrategyBase):
 
             # 计算当前回撤
             drawdown = self.calculate_drawdown(latest_price)
+            # 计算累计持仓与总投入、均价、市值、浮盈
+            position = self.get_position()
+            total_cost = self.get_total_cost()
+            average_cost = self.get_avg_cost()
+            market_value = self.get_market_value(latest_price)
+            profit = self.get_profit(latest_price)
 
-            # 修改重置条件：不重置 last_adjusted_qty
-            if drawdown < 5:
-                self.current_drawdown_layer = 0
-                # 保留 last_adjusted_qty
+            if self.log_level >= 1:
+                print(f"[调试] 当前价格: {latest_price}, 历史最高价: {highest_price}, 当前回撤: {drawdown:.2f}%，持仓: {position}, 总投入: {total_cost:.2f}, 均价: {average_cost:.2f}, 市值: {market_value:.2f}, 浮盈: {profit:.2f}。")
 
-            # 初始化用于定投的数量为基础数量
-            daily_investment_qty = self.investment_qty
+            # ========== 分级功能入口 ========== #
+            # 1. 基础定投模式：仅定投，回撤加仓和极端回撤风控全部失效
+            if self.basic_invest_only:
+                if self.should_invest(current_time):
+                    self.execute_investment(latest_price, account_balance, self.qty)
+                    if self.log_level >= 0:
+                        print(f"[INFO] 仅定投模式 | 本周期已下单类型: 定投 | 持仓: {position}, 总投入: {total_cost}")
+                return
 
-            # 回撤加仓逻辑
+            # 2. 定投+回撤+极端回撤风控（默认）
+            if self.mutual_exclusive:
+                # 极端回撤保护：超过阈值暂停回撤加仓，仅定投
+                if drawdown >= self.extreme_drawdown_pct:
+                    if self.log_level >= 0:
+                        print(f"[风控] 当前回撤({drawdown:.2f}%)已超过极端阈值({self.extreme_drawdown_pct}%)，暂停回撤加仓，仅执行定投。")
+                    if self.should_invest(current_time):
+                        self.execute_investment(latest_price, account_balance, self.qty)
+                        if self.log_level >= 0:
+                            print(f"[INFO] 极端回撤风控 | 本周期已下单类型: 定投 | 持仓: {position}, 总投入: {total_cost}")
+                    return
+
+            # 3. 定投+回撤加仓
             if self.should_add_position(drawdown):
-                volatility = self.calculate_volatility()  
-                adjusted_qty = self.calculate_investment_qty(
-                    base_qty=self.investment_qty,
-                    drawdown=drawdown,
-                    volatility=volatility,
-                    latest_price=latest_price,
-                    average_cost=self.average_cost
-                )
+                volatility = self.calculate_volatility()
+                adjusted_qty, is_max_layer = self.calculate_investment_qty(self.qty, drawdown, volatility, latest_price, self.average_cost, return_max_layer=True)
                 if adjusted_qty > 0:
                     self.execute_add_position(latest_price, adjusted_qty, account_balance)
-                    # 更新上次调整后的数量和定投数量
-                    self.last_adjusted_qty = adjusted_qty
-                    daily_investment_qty = adjusted_qty
+                    if self.log_level >= 0:
+                        print(f"[INFO] 回撤加仓 | 本周期已下单类型: 回撤加仓 | 持仓: {position}, 总投入: {total_cost}")
+                    if is_max_layer:
+                        print(f"[风控] 已达最大加仓层级，后续将只执行常规定投，建议关注风险！")
+                        self.mutual_exclusive = False  # 自动切回常规定投
+                    return
                 else:
-                    # 如果未触发新的加仓但仍在回撤范围内，则使用上次调整的数量
-                    if self.last_adjusted_qty is not None:
-                        daily_investment_qty = self.last_adjusted_qty
+                    # 若加仓层级已满，继续常规定投
+                    if self.should_invest(current_time):
+                        self.execute_investment(latest_price, account_balance, self.qty)
+                        if self.log_level >= 0:
+                            print(f"[INFO] 常规定投(加仓层级已满) | 持仓: {position}, 总投入: {total_cost}")
+                    return
 
-            # 定投逻辑：始终执行
+            # 常规定投逻辑（无回撤加仓时）
             if self.should_invest(current_time):
-                self.execute_investment(latest_price, account_balance, quantity=daily_investment_qty)
+                self.execute_investment(latest_price, account_balance, self.qty)
+                if self.log_level >= 0:
+                    print(f"[INFO] 常规定投 | 本周期已下单类型: 定投 | 持仓: {position}, 总投入: {total_cost}")
 
         except Exception as e:
             print(f"策略运行错误: {str(e)}")
 
     def get_market_data(self):
-        """获取市场数据
-           返回: (最新价, 历史最高价, 账户余额)
         """
-        if self.backtest_mode:
-            # 回测模式下可模拟数据
-            return 100, 100, 1e6  # 简单模拟：最新价100，最高价100，账户余额100万
+        获取市场数据，返回: (最新价, 历史最高价, 账户余额)
+        回测模式下用历史K线真实数据，实盘用实时行情。
+        """
+        if self.backtest:
+            # 回测/模拟盘下，获取K线真实历史数据
+            # 动态调整窗口长度，避免越界
+            if not hasattr(self, 'bar_index'):
+                self.bar_index = 1
+            else:
+                self.bar_index += 1
+            latest_price = bar_close(self.stock, bar_type=BarType.D1, select=1)
+            # 增量缓存高点，提升回测效率
+            self.high_queue.append(latest_price)
+            available_days = min(self.bar_index, 20)
+            high_list = list(self.high_queue)[-available_days:]
+            if len(high_list) == 0:
+                highest_price = latest_price
+            elif len(high_list) == 1:
+                highest_price = high_list[0]
+            else:
+                highest_price = max(high_list[0], high_list[1], *high_list[2:])
+            # 虚拟余额
+            account_balance = self.virtual_balance
+            print(f"[调试] 回测行情数据: 最新收盘价={latest_price}, 近{available_days}日最高价={highest_price}, 虚拟余额={account_balance}")
+            return latest_price, highest_price, account_balance
         else:
-            return (
-                current_price(self.stock, price_type=THType.FTH),
-                bar_high(self.stock, bar_type=BarType.D1, select=1),  # 取最近一个交易日的最高价（可根据需求调整）
-                total_cash()  # 账户总资金
-            )
+            # 实盘下，直接用实时API
+            latest_price = current_price(self.stock, price_type=THType.FTH)
+            # 近20日最高价
+            high_list = [bar_high(self.stock, bar_type=BarType.D1, select=i) for i in range(1, 21)]
+            if len(high_list) == 0:
+                highest_price = latest_price
+            elif len(high_list) == 1:
+                highest_price = high_list[0]
+            else:
+                highest_price = max(high_list[0], high_list[1], *high_list[2:])
+            account_balance = total_cash(currency=Currency.USD)
+            print(f"[调试] 实盘行情数据: 最新价={latest_price}, 近20日最高价={highest_price}, 余额={account_balance}")
+            return latest_price, highest_price, account_balance
+
 
     def should_invest(self, current_time):
         """判断是否进行定投：若从上次定投至今，时间间隔 >= 用户设定的投资周期则触发"""
         if self.last_investment_time is None:
             return True
         elapsed = (current_time - self.last_investment_time).total_seconds() / 60
-        return elapsed >= self.investment_interval
+        return elapsed >= self.interval_min
 
     def execute_investment(self, latest_price, account_balance, quantity=None):
-        invest_qty = quantity if quantity is not None else self.investment_qty
-        if (not self.backtest_mode) and (invest_qty * latest_price > account_balance):
-            print("账户余额不足，无法定投")
+        invest_qty = int(quantity if quantity is not None else self.qty)
+        # 统一合法性校验，模拟和实盘都一致
+        if invest_qty < 10 or invest_qty > 200 or invest_qty % 10 != 0:
+            print(f"[错误] 定投买入股数qty参数非法: {invest_qty}，已重置为10")
+            invest_qty = 10
+        if invest_qty > 10000 or invest_qty < 1:
+            print(f"[错误] 定投买入股数异常: {invest_qty}，请检查参数设置！")
+            return
+        # 回测模式下模拟资金消耗
+        if self.backtest:
+            required_cash = invest_qty * latest_price
+            if required_cash > self.virtual_balance:
+                print(f"虚拟余额不足，无法定投 | 当前余额: {self.virtual_balance}, 需买入金额: {required_cash}, 买入股数: {invest_qty}")
+                return
+            # 调用place_market模拟下单，便于K线和订单记录展示
+            order_id = place_market(self.stock, invest_qty, OrderSide.BUY, TimeInForce.DAY)
+            self.virtual_balance -= required_cash
+            self._total_cost += required_cash
+            self._position += invest_qty
+            print(f"[回测] 定投成功 | 买入股数: {invest_qty}, 成交价: {latest_price}, 剩余虚拟余额: {self.virtual_balance}, 累计持仓: {self._position}, 累计投入: {self._total_cost}")
+            self.last_investment_time = device_time(TimeZone.DEVICE_TIME_ZONE)
+            return
+        # 实盘模式下
+        # 余额感知型qty调整
+        if invest_qty * latest_price > account_balance:
+            max_affordable_qty = int((account_balance // latest_price) // 10 * 10)
+            if max_affordable_qty < 10:
+                print(f"[错误] 账户余额不足，无法定投 | 当前余额: {account_balance}, 当前价格: {latest_price}")
+                return
+            print(f"[警告] 账户余额不足，自动调整买入股数为最大可买: {max_affordable_qty}")
+            invest_qty = max_affordable_qty
+        if invest_qty * latest_price > account_balance:
+            print(f"账户余额不足，无法定投 | 当前余额: {account_balance}, 需买入金额: {invest_qty * latest_price}, 买入股数: {invest_qty}")
             return
         order_id = place_market(self.stock, invest_qty, OrderSide.BUY, TimeInForce.DAY)
         print(f"定投下单成功，订单编号: {order_id}")
@@ -139,14 +249,14 @@ class Strategy(StrategyBase):
 
     def calculate_drawdown_threshold(self):
         """可以做成固定阈值或动态阈值，示例这里直接使用基础阈值"""
-        return self.drawdown_threshold_base
+        return self.drawdown_pct
 
     def calculate_volatility(self):
         """
         从 Moomoo 提供的 historical_volatility 接口获取波动率。
         如果在回测模式下，则返回一个模拟值。
         """
-        if self.backtest_mode:
+        if self.backtest:
             # 回测模式可根据实际需要返回固定值或从历史数据自行计算
             return 1.0
 
@@ -162,7 +272,7 @@ class Strategy(StrategyBase):
             vol = 1.0
         return vol
 
-    def calculate_investment_qty(self, base_qty, drawdown, volatility, latest_price, average_cost):
+    def calculate_investment_qty(self, base_qty, drawdown, volatility, latest_price, average_cost, return_max_layer=False):
         """
         修订示例：分层加仓 + 避免重复触发
         每 5% 升一层：0~4.99%为第0层，5~9.99%为第1层，...
@@ -175,30 +285,102 @@ class Strategy(StrategyBase):
 
         # 算出当前回撤层级
         layer_index = int(drawdown // 5)  # 5% => 1, 10% =>2, ...
+        is_max_layer = False
         if layer_index <= self.current_drawdown_layer:
             # 已经加过这个层，或者更高层，则此次不再加仓
+            if return_max_layer:
+                return 0, (self.current_drawdown_layer >= len(layers) - 1)
             return 0
         
-        # 如果回撤层数超过数组最大索引，则固定为最后一层
+        # 如果回撤层数超过数组最大索引，则固定为最后一层，并输出风险提示
+        original_layer_index = layer_index
         layer_index = min(layer_index, len(layers) - 1)
+        if original_layer_index > layer_index and self.log_level >= 0:
+            print(f"[风控] 已达最大加仓层级({layer_index})，后续均按最高层倍数加仓，注意风险！")
+            is_max_layer = True
 
         # 计算加仓数量
         add_qty_float = base_qty * layers[layer_index]
         adjusted_qty = math.ceil(add_qty_float)
-        print(f"目前系统的波动率为： {volatility}")
+        print(f"[调试] 目前系统的波动率为： {volatility}，当前回撤层级: {layer_index}，当前层级表: {layers}")
 
         # 更新已触发层级
         self.current_drawdown_layer = layer_index
-
+        print(f"[调试] 已更新当前回撤层级为: {self.current_drawdown_layer}")
+        if return_max_layer:
+            return adjusted_qty, is_max_layer or (layer_index == len(layers) - 1)
         return adjusted_qty
 
     def execute_add_position(self, latest_price, adjusted_qty, account_balance):
         """执行回撤加仓"""
-        # 若不在回测模式下，需要检查账户余额是否足够
-        if (not self.backtest_mode) and (adjusted_qty * latest_price > account_balance):
-            print("账户余额不足，无法加仓")
+        adjusted_qty = int(adjusted_qty)
+        if adjusted_qty > 10000 or adjusted_qty < 1:
+            print(f"[错误] 加仓买入股数异常: {adjusted_qty}，请检查参数设置！")
             return
-
+        # 回测模式下模拟资金消耗
+        if self.backtest:
+            if adjusted_qty * latest_price > self.virtual_balance:
+                print(f"虚拟余额不足，无法加仓 | 当前余额: {self.virtual_balance}, 需买入金额: {adjusted_qty * latest_price}, 买入股数: {adjusted_qty}")
+                return
+            # 1. 调用 place_market 模拟下单，获得 order_id
+            order_id = place_market(self.stock, adjusted_qty, OrderSide.BUY, TimeInForce.DAY)
+            # 2. 输出模拟订单流程日志
+            print(f"【订单状态】等待提交。标的：{getattr(self, 'stock', '未知标的')}；交易方向：买；订单类型：市价单；订单数量：{adjusted_qty}股；期限：当日有效。")
+            print(f"【订单状态】已提交，等待成交。标的：{getattr(self, 'stock', '未知标的')}；交易方向：买；订单类型：市价单；订单数量：{adjusted_qty}股；期限：当日有效。")
+            print(f"【成交状态】正常。标的：{getattr(self, 'stock', '未知标的')}；交易方向：买；成交数量：{adjusted_qty}股；成交价格：{latest_price}。")
+            print(f"【订单状态】全部成交。标的：{getattr(self, 'stock', '未知标的')}；交易方向：买；订单类型：市价单；订单数量：{adjusted_qty}股；期限：当日有效。")
+            print(f"订单委托成功。标的：{getattr(self, 'stock', '未知标的')}；交易方向：买；数量：{adjusted_qty}股；订单类型：市价单；期限：当日有效。")
+            # 3. 更新虚拟资金、持仓、成本
+            self.virtual_balance -= adjusted_qty * latest_price
+            self._total_cost += adjusted_qty * latest_price
+            self._position += adjusted_qty
+            # 4. 输出自定义加仓日志
+            print(f"[回测] 加仓成功 | 买入股数: {adjusted_qty}, 成交价: {latest_price}, 剩余虚拟余额: {self.virtual_balance}, 累计持仓: {self._position}, 累计投入: {self._total_cost}")
+            return
+        elif adjusted_qty * latest_price > account_balance:
+            print(f"账户余额不足，无法加仓 | 当前余额: {account_balance}, 需买入金额: {adjusted_qty * latest_price}, 买入股数: {adjusted_qty}")
+            return
         order_id = place_market(self.stock, adjusted_qty, OrderSide.BUY, TimeInForce.DAY)
-        print(f"加仓下单成功，订单编号: {order_id}")
+        print(f"[调试] 加仓下单成功，订单编号: {order_id}，加仓数量: {adjusted_qty}，下单价格: {latest_price}")
         # 如果需要更新平均成本等信息，可以在此处进行额外处理
+
+    def get_position(self):
+        """获取当前持仓股数"""
+        if self.backtest:
+            return self._position
+        try:
+            return position_holding_qty(self.stock)
+        except Exception as e:
+            print(f"[调试] 获取实盘持仓失败: {str(e)}")
+            return 0
+
+    def get_total_cost(self):
+        """获取累计买入总金额"""
+        if self.backtest:
+            return self._total_cost
+        try:
+            pos = position_holding_qty(self.stock)
+            avg_cost = position_cost(self.stock, cost_price_model=CostPriceModel.AVG)
+            return pos * avg_cost
+        except Exception as e:
+            print(f"[调试] 获取实盘总投入失败: {str(e)}")
+            return 0.0
+
+    def get_avg_cost(self):
+        """获取持仓均价"""
+        if self.backtest:
+            pos = self._position
+            return self._total_cost / pos if pos > 0 else 0.0
+        try:
+            return position_cost(self.stock, cost_price_model=CostPriceModel.AVG)
+        except Exception as e:
+            print(f"[调试] 获取实盘均价失败: {str(e)}")
+            return 0.0
+
+    def get_market_value(self, latest_price):
+        """获取当前持仓市值"""
+        return self.get_position() * latest_price
+
+    def get_profit(self, latest_price):
+        """获取当前浮动盈亏"""
+        return self.get_market_value(latest_price) - self.get_total_cost()

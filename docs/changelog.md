@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [strategy_v3 v5.3.10] - 2025-03-11
+### Added
+- Enhanced grid trading strategy with improved position management
+- Added price range validation for trading operations
+- Enabled isolation mode by default for better position handling
+- Updated documentation with new features and parameters
+### Fixed
+- Position synchronization issues in isolation mode
+- Price range and position statistics calculation errors
+
 ## [strategy_v3_1] - 2024-11-25
 ### Added
 - Introduced `enable_position_sync_in_backtest` parameter to allow skipping position synchronization during backtesting

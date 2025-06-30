@@ -62,7 +62,11 @@ fix(order): correct order quantity calculation
 
 ### 文档更新
 ```
-docs: update strategy documentation and changelog
+docs: update project documentation for v5.3.8
+
+- Update changelog with v5.3.8 features and fixes
+- Enhance README with latest version features and directory structure
+- Improve overview.md with detailed project description and functionalities
 ```
 
 ### 代码重构
